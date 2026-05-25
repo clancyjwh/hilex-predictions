@@ -3,6 +3,7 @@ import urllib.request
 import urllib.parse
 import os
 import concurrent.futures
+from http.server import BaseHTTPRequestHandler
 
 PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY", "")
 OPENAI_API_KEY     = os.environ.get("OPENAI_API_KEY", "")
@@ -11,7 +12,7 @@ SUPABASE_KEY       = os.environ.get("SUPABASE_SERVICE_KEY", "")
 
 POLYMARKET_API = "https://gamma-api.polymarket.com/markets"
 PERPLEXITY_API = "https://api.perplexity.ai/chat/completions"
-OPENAI_API     = "https://api.openai.com/v1/chat/completions"
+OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
 
 
 def http_post(url, payload, headers):
@@ -27,7 +28,7 @@ def http_get(url):
 
 def openai_chat(messages):
     resp = http_post(
-        OPENAI_API,
+        OPENAI_API_URL,
         {"model": "gpt-4o", "messages": messages, "temperature": 0.2},
         {"Content-Type": "application/json", "Authorization": f"Bearer {OPENAI_API_KEY}"}
     )
@@ -67,7 +68,7 @@ def run_perplexity(query):
         {
             "model": "llama-3.1-sonar-large-128k-online",
             "messages": [
-                {"role": "system", "content": "You are a factual research agent. Research the following prediction market event and return ONLY this JSON with no other text: {\"key_facts\": [], \"current_conditions\": [], \"historical_context\": [], \"expert_analysis\": [], \"momentum_signals\": [], \"risk_factors\": [], \"timing_pressure\": \"\"}"},
+                {"role": "system", "content": 'You are a factual research agent. Research the following prediction market event and return ONLY this JSON with no other text: {"key_facts": [], "current_conditions": [], "historical_context": [], "expert_analysis": [], "momentum_signals": [], "risk_factors": [], "timing_pressure": ""}'},
                 {"role": "user", "content": f'Event: "{query}"'}
             ],
             "temperature": 0.1
@@ -78,14 +79,14 @@ def run_perplexity(query):
 
 def extract_features(research):
     content = openai_chat([
-        {"role": "system", "content": "You are a feature extraction engine. Convert research into numeric scores. Return ONLY this JSON: {\"sentiment_score\": 0, \"momentum_score\": 0, \"expert_consensus_score\": 0, \"historical_similarity_score\": 0, \"structural_bias_score\": 0, \"uncertainty_score\": 0, \"timeline_pressure_score\": 0, \"risk_factors\": []}. Scores range -1 to +1 except uncertainty_score which is 0 to 1."},
+        {"role": "system", "content": 'You are a feature extraction engine. Convert research into numeric scores. Return ONLY this JSON: {"sentiment_score": 0, "momentum_score": 0, "expert_consensus_score": 0, "historical_similarity_score": 0, "structural_bias_score": 0, "uncertainty_score": 0, "timeline_pressure_score": 0, "risk_factors": []}. Scores range -1 to +1 except uncertainty_score which is 0 to 1.'},
         {"role": "user", "content": json.dumps(research)}
     ])
     return safe_json(content)
 
 def match_market(query, markets):
     content = openai_chat([
-        {"role": "system", "content": "You are a market matching engine. Find the best matching Polymarket market. Return ONLY raw JSON. If match: {\"match\":true,\"slug\":\"...\",\"question\":\"...\",\"yes_prob\":0.00,\"liquidity\":0.00,\"volume\":0.00,\"week_change\":0.00} If no match: {\"match\":false}"},
+        {"role": "system", "content": 'You are a market matching engine. Find the best matching Polymarket market. Return ONLY raw JSON. If match: {"match":true,"slug":"...","question":"...","yes_prob":0.00,"liquidity":0.00,"volume":0.00,"week_change":0.00} If no match: {"match":false}'},
         {"role": "user", "content": f'Event: "{query}"\n\nMarkets:\n{json.dumps(markets)}'}
     ])
     return safe_json(content)
@@ -127,9 +128,10 @@ def calculate_misprice(features, match):
             "features": features}
 
 def generate_narration(query, result, research):
-    payload = {"event": query, "direction": result.get("our_direction"), "features": result.get("features", {}), "research": research}
+    payload = {"event": query, "direction": result.get("our_direction"),
+               "features": result.get("features", {}), "research": research}
     content = openai_chat([
-        {"role": "system", "content": "You are a Market Intelligence Narrator for HiLEX. Write two summaries as JSON. Return ONLY: {\"signal_summary\":\"...\",\"market_summary\":\"...\"}. signal_summary: 4-6 sentences of flowing prose about what signals indicate and key evidence. market_summary: 2-3 sentence briefing note. No scores, no numbers from signal engine, no bullet points, no recommendations."},
+        {"role": "system", "content": 'You are a Market Intelligence Narrator for HiLEX. Write two summaries. Return ONLY: {"signal_summary":"...","market_summary":"..."}. signal_summary: 4-6 sentences of flowing prose about signals and evidence. market_summary: 2-3 sentence briefing note. No scores, no bullet points, no recommendations.'},
         {"role": "user", "content": json.dumps(payload)}
     ])
     return safe_json(content)
@@ -141,10 +143,13 @@ def log_to_supabase(query, result, narration):
         http_post(
             f"{SUPABASE_URL}/rest/v1/prediction_log",
             {"event_description": query, "polymarket_slug": result.get("polymarket_slug"),
-             "polymarket_yes_prob": result.get("polymarket_yes_prob"), "polymarket_liquidity": result.get("polymarket_liquidity"),
-             "our_signal_score": result.get("our_signal_score"), "our_direction": result.get("our_direction"),
+             "polymarket_yes_prob": result.get("polymarket_yes_prob"),
+             "polymarket_liquidity": result.get("polymarket_liquidity"),
+             "our_signal_score": result.get("our_signal_score"),
+             "our_direction": result.get("our_direction"),
              "gap": result.get("gap"), "misprice_flag": result.get("misprice_flag"),
-             "signal_summary": narration.get("signal_summary"), "market_summary": narration.get("market_summary")},
+             "signal_summary": narration.get("signal_summary"),
+             "market_summary": narration.get("market_summary")},
             {"Content-Type": "application/json", "apikey": SUPABASE_KEY,
              "Authorization": f"Bearer {SUPABASE_KEY}", "Prefer": "return=minimal"}
         )
@@ -174,29 +179,39 @@ def run_analysis(query):
             "research": research}
 
 
-def handler(request):
-    if request.method == "OPTIONS":
-        return Response("", status=200, headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type"
-        })
+class handler(BaseHTTPRequestHandler):
 
-    if request.method != "POST":
-        return Response(json.dumps({"error": "POST only"}), status=405,
-                        headers={"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"})
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self._cors()
+        self.end_headers()
 
-    try:
-        body  = json.loads(request.body)
-        query = (body.get("query") or "").strip()
-        if not query:
-            return Response(json.dumps({"error": "query is required"}), status=400,
-                            headers={"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"})
+    def do_POST(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body   = json.loads(self.rfile.read(length).decode("utf-8"))
+            query  = (body.get("query") or "").strip()
+            if not query:
+                self._respond(400, {"error": "query is required"})
+                return
+            result = run_analysis(query)
+            self._respond(200, result)
+        except Exception as e:
+            self._respond(500, {"error": str(e)})
 
-        result = run_analysis(query)
-        return Response(json.dumps(result), status=200,
-                        headers={"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"})
+    def _respond(self, status, data):
+        payload = json.dumps(data).encode("utf-8")
+        self.send_response(status)
+        self._cors()
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", len(payload))
+        self.end_headers()
+        self.wfile.write(payload)
 
-    except Exception as e:
-        return Response(json.dumps({"error": str(e)}), status=500,
-                        headers={"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"})
+    def _cors(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+    def log_message(self, *args):
+        pass
