@@ -4,6 +4,7 @@ import urllib.parse
 import os
 import concurrent.futures
 import traceback
+import sys
 
 PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY", "")
 OPENAI_API_KEY     = os.environ.get("OPENAI_API_KEY", "")
@@ -14,6 +15,17 @@ POLYMARKET_API = "https://gamma-api.polymarket.com/markets"
 PERPLEXITY_URL = "https://api.perplexity.ai/chat/completions"
 OPENAI_URL     = "https://api.openai.com/v1/chat/completions"
 
+CORS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Content-Type": "application/json"
+}
+
+def err(msg, tb=""):
+    print("HILEX ERROR:", msg, file=sys.stderr)
+    print(tb, file=sys.stderr)
+    return {"statusCode": 500, "headers": CORS, "body": json.dumps({"error": msg, "trace": tb})}
 
 def http_post(url, payload, headers):
     data = json.dumps(payload).encode("utf-8")
@@ -102,7 +114,7 @@ def misprice(feats, mat):
 
 def narrate(query, result, res):
     return safe_json(openai([
-        {"role": "system", "content": 'Write market intelligence for HiLEX. Return ONLY: {"signal_summary":"...","market_summary":"..."}. signal_summary: 4-6 sentences of flowing prose about signals and evidence. market_summary: 2-3 sentence briefing note. No numbers from scoring, no bullet points, no recommendations.'},
+        {"role": "system", "content": 'Write market intelligence for HiLEX. Return ONLY: {"signal_summary":"...","market_summary":"..."}. signal_summary: 4-6 sentences of flowing prose. market_summary: 2-3 sentence briefing note. No numbers, no bullets, no recommendations.'},
         {"role": "user", "content": json.dumps({"event": query, "direction": result.get("our_direction"), "features": result.get("features",{}), "research": res})}]))
 
 def log_supabase(query, result, narration):
@@ -124,16 +136,19 @@ def log_supabase(query, result, narration):
         pass
 
 def run(query):
+    print(f"HILEX: starting analysis for: {query}", file=sys.stderr)
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
         fm = ex.submit(fetch_polymarket, query)
         fr = ex.submit(research, query)
         markets = fm.result()
         res     = fr.result()
+    print("HILEX: polymarket + research done", file=sys.stderr)
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
         ff  = ex.submit(features, res)
         fma = ex.submit(match, query, markets)
         feats = ff.result()
         mat   = fma.result()
+    print("HILEX: features + match done", file=sys.stderr)
     result    = misprice(feats, mat)
     narration = narrate(query, result, res)
     log_supabase(query, result, narration)
@@ -143,20 +158,11 @@ def run(query):
             "research": res}
 
 
-CORS = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Content-Type": "application/json"
-}
-
 def handler(request):
     if request.method == "OPTIONS":
         return {"statusCode": 200, "headers": CORS, "body": ""}
-
     if request.method != "POST":
         return {"statusCode": 405, "headers": CORS, "body": json.dumps({"error": "POST only"})}
-
     try:
         body  = json.loads(request.body if isinstance(request.body, str) else request.body.decode())
         query = (body.get("query") or "").strip()
@@ -165,4 +171,5 @@ def handler(request):
         result = run(query)
         return {"statusCode": 200, "headers": CORS, "body": json.dumps(result)}
     except Exception as e:
-        return {"statusCode": 500, "headers": CORS, "body": json.dumps({"error": str(e), "trace": traceback.format_exc()})}
+        tb = traceback.format_exc()
+        return err(str(e), tb)
