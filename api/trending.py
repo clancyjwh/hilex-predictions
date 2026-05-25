@@ -1,0 +1,121 @@
+import json
+import urllib.request
+import urllib.parse
+import os
+import concurrent.futures
+from datetime import datetime, timezone
+
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_API     = "https://api.openai.com/v1/chat/completions"
+
+POLYMARKET_TRENDING = "https://gamma-api.polymarket.com/markets?active=true&limit=100&order=volume24hr&ascending=false"
+POLYMARKET_MOVERS   = "https://gamma-api.polymarket.com/markets?active=true&limit=100"
+
+def http_get(url):
+    req = urllib.request.Request(url)
+    with urllib.request.urlopen(req, timeout=15) as r:
+        data = json.loads(r.read().decode("utf-8"))
+    return data if isinstance(data, list) else data.get("markets", [])
+
+def http_post(url, payload, headers):
+    data = json.dumps(payload).encode("utf-8")
+    req  = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+def safe_json(text):
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+    return json.loads(text.strip())
+
+def parse_yes_prob(m):
+    try:
+        return float(json.loads(m.get("outcomePrices", "[null]"))[0])
+    except Exception:
+        return None
+
+def get_trending(markets):
+    now = datetime.now(timezone.utc)
+    filtered = []
+    for m in markets:
+        yp = parse_yes_prob(m)
+        if yp is None or yp > 0.95 or yp < 0.05:
+            continue
+        try:
+            end = m.get("endDate", "")
+            if end and datetime.fromisoformat(end.replace("Z", "+00:00")) < now:
+                continue
+        except Exception:
+            pass
+        filtered.append(m)
+
+    seen, deduped = [], []
+    for m in filtered:
+        words = "-".join(m.get("slug", "").split("-")[:4])
+        if not any(len([w for w in words.split("-") if w in s.split("-")]) >= 3 for s in seen):
+            seen.append(words)
+            yp = parse_yes_prob(m)
+            deduped.append({"question": m.get("question"), "slug": m.get("slug"),
+                            "yes_prob": str(yp), "liquidity": m.get("liquidityNum", 0),
+                            "volume": m.get("volumeNum", 0), "week_change": m.get("oneWeekPriceChange", 0),
+                            "tag": "trending"})
+        if len(deduped) == 10:
+            break
+    return deduped
+
+def get_big_movers(markets):
+    movers = []
+    for m in markets:
+        try:
+            wc = float(m.get("oneWeekPriceChange") or 0)
+        except Exception:
+            wc = 0
+        if abs(wc) >= 0.15:
+            yp = parse_yes_prob(m)
+            movers.append({"question": m.get("question"), "slug": m.get("slug"),
+                           "yes_prob": str(yp), "liquidity": m.get("liquidityNum", 0),
+                           "volume": m.get("volumeNum", 0), "week_change": wc,
+                           "tag": "big_mover", "direction": "up" if wc > 0 else "down"})
+    movers.sort(key=lambda x: abs(float(x["week_change"])), reverse=True)
+    return movers[:5]
+
+def normalize_questions(questions, big_movers):
+    payload = json.dumps({"questions": questions, "big_movers": big_movers})
+    resp = http_post(
+        OPENAI_API,
+        {"model": "gpt-4o", "messages": [
+            {"role": "system", "content": "You are a prediction market question normalizer. Ensure every question is a clean binary YES/NO. If already binary leave unchanged. If ambiguous rewrite as 'Will X happen?'. Never change any field except question. Return ONLY the same JSON structure as input, no markdown."},
+            {"role": "user", "content": payload}
+        ], "temperature": 0.1},
+        {"Content-Type": "application/json", "Authorization": f"Bearer {OPENAI_API_KEY}"}
+    )
+    return safe_json(resp["choices"][0]["message"]["content"])
+
+def run_trending():
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+        f_t = ex.submit(http_get, POLYMARKET_TRENDING)
+        f_m = ex.submit(http_get, POLYMARKET_MOVERS)
+        trending_raw = f_t.result()
+        movers_raw   = f_m.result()
+
+    questions  = get_trending(trending_raw)
+    big_movers = get_big_movers(movers_raw)
+    return normalize_questions(questions, big_movers)
+
+def handler(request):
+    if request.method == "OPTIONS":
+        return Response("", status=200, headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type"
+        })
+    try:
+        result = run_trending()
+        return Response(json.dumps(result), status=200,
+                        headers={"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"})
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500,
+                        headers={"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"})
