@@ -1,12 +1,12 @@
 import json
 import urllib.request
-import urllib.parse
 import os
 import concurrent.futures
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-OPENAI_API     = "https://api.openai.com/v1/chat/completions"
+OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
 
 POLYMARKET_TRENDING = "https://gamma-api.polymarket.com/markets?active=true&limit=100&order=volume24hr&ascending=false"
 POLYMARKET_MOVERS   = "https://gamma-api.polymarket.com/markets?active=true&limit=100"
@@ -60,8 +60,8 @@ def get_trending(markets):
             yp = parse_yes_prob(m)
             deduped.append({"question": m.get("question"), "slug": m.get("slug"),
                             "yes_prob": str(yp), "liquidity": m.get("liquidityNum", 0),
-                            "volume": m.get("volumeNum", 0), "week_change": m.get("oneWeekPriceChange", 0),
-                            "tag": "trending"})
+                            "volume": m.get("volumeNum", 0),
+                            "week_change": m.get("oneWeekPriceChange", 0), "tag": "trending"})
         if len(deduped) == 10:
             break
     return deduped
@@ -85,7 +85,7 @@ def get_big_movers(markets):
 def normalize_questions(questions, big_movers):
     payload = json.dumps({"questions": questions, "big_movers": big_movers})
     resp = http_post(
-        OPENAI_API,
+        OPENAI_API_URL,
         {"model": "gpt-4o", "messages": [
             {"role": "system", "content": "You are a prediction market question normalizer. Ensure every question is a clean binary YES/NO. If already binary leave unchanged. If ambiguous rewrite as 'Will X happen?'. Never change any field except question. Return ONLY the same JSON structure as input, no markdown."},
             {"role": "user", "content": payload}
@@ -100,22 +100,38 @@ def run_trending():
         f_m = ex.submit(http_get, POLYMARKET_MOVERS)
         trending_raw = f_t.result()
         movers_raw   = f_m.result()
-
     questions  = get_trending(trending_raw)
     big_movers = get_big_movers(movers_raw)
     return normalize_questions(questions, big_movers)
 
-def handler(request):
-    if request.method == "OPTIONS":
-        return Response("", status=200, headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type"
-        })
-    try:
-        result = run_trending()
-        return Response(json.dumps(result), status=200,
-                        headers={"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"})
-    except Exception as e:
-        return Response(json.dumps({"error": str(e)}), status=500,
-                        headers={"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"})
+
+class handler(BaseHTTPRequestHandler):
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self._cors()
+        self.end_headers()
+
+    def do_GET(self):
+        try:
+            result = run_trending()
+            self._respond(200, result)
+        except Exception as e:
+            self._respond(500, {"error": str(e)})
+
+    def _respond(self, status, data):
+        payload = json.dumps(data).encode("utf-8")
+        self.send_response(status)
+        self._cors()
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", len(payload))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _cors(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+    def log_message(self, *args):
+        pass
