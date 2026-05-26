@@ -5,6 +5,8 @@ import os
 import concurrent.futures
 import traceback
 import sys
+import hashlib
+import time
 from http.server import BaseHTTPRequestHandler
 
 PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY", "")
@@ -83,6 +85,28 @@ def fetch_polymarket(keyword):
                 continue
     return slim
 
+def fetch_polymarket_by_slug(slug):
+    try:
+        url = f"https://gamma-api.polymarket.com/markets/slug/{slug}"
+        m = http_get(url)
+        if isinstance(m, dict) and m.get("id"):
+            prices = m.get("outcomePrices")
+            yes_prob = None
+            if isinstance(prices, list) and len(prices) > 0:
+                yes_prob = float(prices[0]) if prices[0] is not None else None
+            return {
+                "slug": m.get("slug"),
+                "question": m.get("question"),
+                "yes_prob": yes_prob,
+                "liquidity": float(m.get("liquidityNum") or m.get("liquidity") or 0),
+                "volume": float(m.get("volumeNum") or m.get("volume") or 0),
+                "week_change": float(m.get("oneWeekPriceChange") or 0)
+            }
+    except Exception as e:
+        print(f"HILEX: error fetching slug {slug}: {e}", file=sys.stderr)
+    return None
+
+
 def research(query):
     resp = http_post(PERPLEXITY_URL, {
         "model": "sonar",
@@ -158,22 +182,80 @@ def log_supabase(query, result, narration):
     except Exception:
         pass
 
-def run(query):
-    print(f"HILEX: starting analysis for: {query}", file=sys.stderr)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
-        fm = ex.submit(fetch_polymarket, query)
-        fr = ex.submit(research, query)
-        markets = fm.result()
-        res     = fr.result()
-    print("HILEX: polymarket + research done", file=sys.stderr)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
-        ff  = ex.submit(features, res)
-        fma = ex.submit(match, query, markets)
-        feats = ff.result()
-        mat   = fma.result()
-    print("HILEX: features + match done", file=sys.stderr)
-    result    = misprice(feats, mat)
-    narration = narrate(query, result, res)
+def get_cache_path(query):
+    clean_q = query.strip().lower()
+    h = hashlib.md5(clean_q.encode('utf-8')).hexdigest()
+    if os.name == 'nt':
+        import tempfile
+        return os.path.join(tempfile.gettempdir(), f'hilex_analysis_{h}.json')
+    return f'/tmp/hilex_analysis_{h}.json'
+
+def run(query, slug=None):
+    print(f"HILEX: starting analysis for: {query} (slug: {slug})", file=sys.stderr)
+    
+    # Check cache for LLM results
+    cache_path = get_cache_path(query)
+    cached_data = None
+    use_cache = False
+    
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, 'r', encoding='utf-8') as f:
+                cached_data = json.load(f)
+            ts = cached_data.get("timestamp", 0)
+            if time.time() - ts < 86400: # 24 hours TTL
+                use_cache = True
+                print("HILEX: using cached analysis results", file=sys.stderr)
+        except Exception as e:
+            print(f"HILEX: error reading cache: {e}", file=sys.stderr)
+            
+    if use_cache and cached_data:
+        res = cached_data.get("research")
+        feats = cached_data.get("features")
+        narration = cached_data.get("narration")
+    else:
+        print("HILEX: running LLM pipeline...", file=sys.stderr)
+        res = research(query)
+        feats = features(res)
+        
+        # Calculate a temporary misprice result solely for the narration input
+        scores = [feats.get(k, 0) for k in ["sentiment_score","momentum_score","expert_consensus_score","historical_similarity_score","structural_bias_score","timeline_pressure_score"]]
+        score  = sum(scores) / len(scores) if scores else 0.0
+        temp_dir = "YES" if score > 0.1 else ("NO" if score < -0.1 else "UNCERTAIN")
+        temp_result = {"our_direction": temp_dir, "features": feats}
+        
+        narration = narrate(query, temp_result, res)
+        
+        # Save to cache
+        try:
+            with open(cache_path, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "timestamp": time.time(),
+                    "research": res,
+                    "features": feats,
+                    "narration": narration
+                }, f)
+        except Exception as e:
+            print(f"HILEX: error writing cache: {e}", file=sys.stderr)
+
+    # Now fetch live Polymarket odds
+    print("HILEX: fetching live Polymarket odds...", file=sys.stderr)
+    mat = None
+    if slug:
+        market_by_slug = fetch_polymarket_by_slug(slug)
+        if market_by_slug:
+            mat = {
+                "match": True,
+                **market_by_slug
+            }
+            print(f"HILEX: found direct slug match: {slug}", file=sys.stderr)
+            
+    if not mat:
+        print("HILEX: falling back to fuzzy text search", file=sys.stderr)
+        markets = fetch_polymarket(query)
+        mat = match(query, markets)
+        
+    result = misprice(feats, mat)
     log_supabase(query, result, narration)
     
     # Map backend scores to what the frontend expects
@@ -210,10 +292,11 @@ class handler(BaseHTTPRequestHandler):
             post_data = self.rfile.read(content_length)
             body = json.loads(post_data.decode('utf-8'))
             query = (body.get("query") or "").strip()
+            slug = (body.get("slug") or body.get("polymarket_slug") or "").strip()
             if not query:
                 self._respond(400, {"error": "query is required"})
                 return
-            result = run(query)
+            result = run(query, slug=slug if slug else None)
             self._respond(200, result)
         except Exception as e:
             tb = traceback.format_exc()

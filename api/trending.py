@@ -42,7 +42,13 @@ def safe_json(text):
 
 def parse_yes_prob(m):
     try:
-        return float(json.loads(m.get("outcomePrices", "[null]"))[0])
+        prices = m.get("outcomePrices")
+        if isinstance(prices, list):
+            return float(prices[0]) if len(prices) > 0 and prices[0] is not None else None
+        if isinstance(prices, str):
+            p_list = json.loads(prices)
+            return float(p_list[0]) if isinstance(p_list, list) and len(p_list) > 0 and p_list[0] is not None else None
+        return None
     except Exception:
         return None
 
