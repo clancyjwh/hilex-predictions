@@ -34,6 +34,14 @@ def severity(flags):
 def detect_whales(markets):
     flagged = []
     for m in markets:
+        end = m.get("endDate", "")
+        if end:
+            try:
+                if datetime.fromisoformat(end.replace("Z", "+00:00")) < datetime.now(timezone.utc):
+                    continue
+            except Exception:
+                pass
+
         yp = parse_yes_prob(m)
         if yp is None:
             continue
@@ -73,7 +81,16 @@ def detect_whales(markets):
                 "explanation": "A large volume of money has moved through a market with very little liquidity to support it. When someone trades heavily on a shallow market, they can move the odds significantly with relatively little capital — a common manipulation tactic."
             })
 
-        if yp > 0.88 or yp < 0.12:
+        is_near_expiry = False
+        if end:
+            try:
+                end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
+                if (end_dt - datetime.now(timezone.utc)).days <= 7:
+                    is_near_expiry = True
+            except Exception:
+                pass
+
+        if (yp > 0.88 or yp < 0.12) and not is_near_expiry:
             flags.append({
                 "type": "certainty_creep",
                 "label": "Certainty Creep",
