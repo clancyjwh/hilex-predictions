@@ -57,19 +57,30 @@ def safe_json(text):
     return json.loads(text.strip())
 
 def fetch_polymarket(keyword):
-    params = urllib.parse.urlencode({"active": "true", "limit": 20, "keyword": keyword})
-    data   = http_get(f"{POLYMARKET_API}?{params}")
-    markets = data if isinstance(data, list) else data.get("markets", [])
+    params = urllib.parse.urlencode({"q": keyword})
+    data   = http_get(f"https://gamma-api.polymarket.com/public-search?{params}")
+    events = data.get("events", []) if isinstance(data, dict) else []
     slim = []
-    for m in markets:
-        try:
-            prices = json.loads(m.get("outcomePrices", "[null]"))
-            slim.append({"slug": m.get("slug"), "question": m.get("question"),
-                         "yes_prob": float(prices[0]) if prices[0] else None,
-                         "liquidity": m.get("liquidityNum", 0), "volume": m.get("volumeNum", 0),
-                         "week_change": m.get("oneWeekPriceChange", 0)})
-        except Exception:
-            continue
+    for e in events:
+        markets = e.get("markets", [])
+        for m in markets:
+            if not m.get("active") or m.get("closed"):
+                continue  # Only keep active, open markets
+            try:
+                prices = m.get("outcomePrices")
+                yes_prob = None
+                if isinstance(prices, list) and len(prices) > 0:
+                    yes_prob = float(prices[0]) if prices[0] else None
+                slim.append({
+                    "slug": m.get("slug"),
+                    "question": m.get("question"),
+                    "yes_prob": yes_prob,
+                    "liquidity": float(m.get("liquidityNum") or m.get("liquidity") or 0),
+                    "volume": float(m.get("volumeNum") or m.get("volume") or 0),
+                    "week_change": float(m.get("oneWeekPriceChange") or 0)
+                })
+            except Exception:
+                continue
     return slim
 
 def research(query):
