@@ -20,14 +20,44 @@ def fetch_polymarket(keyword):
     slim = []
     for m in markets:
         try:
-            prices = json.loads(m.get("outcomePrices", "[null]"))
+            prices = m.get("outcomePrices")
+            if isinstance(prices, str):
+                try:
+                    prices = json.loads(prices)
+                except Exception:
+                    prices = [None]
+            if not isinstance(prices, list):
+                prices = [None]
+            
+            yes_prob = None
+            if len(prices) > 0 and prices[0] is not None and prices[0] != "":
+                try:
+                    yes_prob = float(prices[0])
+                except Exception:
+                    pass
+
+            try:
+                liquidity = float(m.get("liquidityNum") or 0)
+            except Exception:
+                liquidity = 0.0
+
+            try:
+                volume = float(m.get("volumeNum") or 0)
+            except Exception:
+                volume = 0.0
+
+            try:
+                week_change = float(m.get("oneWeekPriceChange") or 0)
+            except Exception:
+                week_change = 0.0
+
             slim.append({
                 "slug": m.get("slug"),
                 "question": m.get("question"),
-                "yes_prob": float(prices[0]) if prices[0] else None,
-                "liquidity": m.get("liquidityNum", 0),
-                "volume": m.get("volumeNum", 0),
-                "week_change": m.get("oneWeekPriceChange", 0)
+                "yes_prob": yes_prob,
+                "liquidity": liquidity,
+                "volume": volume,
+                "week_change": week_change
             })
         except Exception:
             continue
