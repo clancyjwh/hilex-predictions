@@ -5,6 +5,7 @@ import sys
 import traceback
 from datetime import datetime, timezone, timedelta
 from http.server import BaseHTTPRequestHandler
+from concurrent.futures import ThreadPoolExecutor
 
 CACHE_FILE = "/tmp/whale_cache.json"
 CACHE_HOURS = 1
@@ -124,6 +125,71 @@ def detect_whales(markets):
     flagged.sort(key=lambda x: (x["flag_count"], abs(x["week_change"])), reverse=True)
     return flagged[:20]
 
+def generate_fallback_summary(question, flags):
+    reasons = []
+    for f in flags:
+        reasons.append(f"{f['label'].lower()} ({f['detail']})")
+    
+    reasons_str = ", and ".join(reasons)
+    
+    summary = (
+        f"This market was flagged for investigation due to a {reasons_str}. "
+        f"These conditions suggest abnormal trading patterns that could indicate targeted manipulation or sudden sentiment shift by large capital holders (whales). "
+        f"Analysts should exercise caution as the current odds may not accurately reflect organic crowd consensus."
+    )
+    return summary
+
+def get_ai_summary(question, flags, api_key):
+    if not api_key:
+        return generate_fallback_summary(question, flags)
+    
+    flag_desc = []
+    for f in flags:
+        flag_desc.append(f"{f['label']} ({f['detail']}): {f['explanation']}")
+    flag_text = "\n- ".join(flag_desc)
+    
+    prompt = (
+        f"You are a financial analyst. Write a beginner-friendly 2-3 sentence summary explaining exactly why this prediction market was flagged as anomalous.\n"
+        f"Market Question: {question}\n"
+        f"Flagged Reasons:\n- {flag_text}\n\n"
+        f"Instructions:\n"
+        f"- Be concise: exactly 2 to 3 sentences.\n"
+        f"- Explain the anomaly in simple, beginner-friendly terms (e.g. explain what liquidity or velocity spikes mean here).\n"
+        f"- Mention specific details/numbers from the flagged reasons.\n"
+        f"- Do not use greeting, introductory or concluding remarks. Start directly with the summary."
+    )
+    
+    try:
+        url = "https://api.openai.com/v1/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+        data = {
+            "model": "gpt-4o-mini",
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.5,
+            "max_tokens": 150
+        }
+        req = urllib.request.Request(
+            url, 
+            data=json.dumps(data).encode("utf-8"), 
+            headers=headers,
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=6) as r:
+            resp = json.loads(r.read().decode("utf-8"))
+            summary = resp["choices"][0]["message"]["content"].strip()
+            return summary
+    except Exception as e:
+        print(f"AI summary error: {e}", file=sys.stderr)
+        return generate_fallback_summary(question, flags)
+
+def add_summary(m, api_key):
+    m["ai_summary"] = get_ai_summary(m["question"], m["flags"], api_key)
+
 def run_whale_scan():
     try:
         with open(CACHE_FILE, "r") as f:
@@ -138,6 +204,16 @@ def run_whale_scan():
     print("WHALE: fetching fresh data", file=sys.stderr)
     markets = http_get(POLYMARKET_URL)
     flagged = detect_whales(markets)
+
+    # Generate AI summaries in parallel
+    api_key = os.environ.get("OPENAI_API_KEY")
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = [executor.submit(add_summary, m, api_key) for m in flagged]
+        for fut in futures:
+            try:
+                fut.result()
+            except Exception as e:
+                print(f"Error executing ThreadPool: {e}", file=sys.stderr)
 
     try:
         with open(CACHE_FILE, "w") as f:
