@@ -35,7 +35,11 @@ def http_post(url, payload, headers):
         return json.loads(r.read().decode("utf-8"))
 
 def http_get(url):
-    with urllib.request.urlopen(url, timeout=15) as r:
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+    )
+    with urllib.request.urlopen(req, timeout=15) as r:
         return json.loads(r.read().decode("utf-8"))
 
 def openai(messages):

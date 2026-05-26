@@ -12,7 +12,10 @@ POLYMARKET_TRENDING = "https://gamma-api.polymarket.com/markets?active=true&limi
 POLYMARKET_MOVERS   = "https://gamma-api.polymarket.com/markets?active=true&limit=100"
 
 def http_get(url):
-    req = urllib.request.Request(url)
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+    )
     with urllib.request.urlopen(req, timeout=15) as r:
         data = json.loads(r.read().decode("utf-8"))
     return data if isinstance(data, list) else data.get("markets", [])
