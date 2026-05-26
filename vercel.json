@@ -1,13 +1,13 @@
 {
   "version": 2,
   "builds": [
-    { "src": "api/analyze.py", "use": "@vercel/python" },
+    { "src": "api/analyze.py",  "use": "@vercel/python" },
     { "src": "api/trending.py", "use": "@vercel/python" },
-    { "src": "api/whale.py", "use": "@vercel/python" }
+    { "src": "api/whale.py",    "use": "@vercel/python" }
   ],
   "routes": [
-    { "src": "/api/analyze", "dest": "/api/analyze.py", "methods": ["POST", "OPTIONS"] },
+    { "src": "/api/analyze",  "dest": "/api/analyze.py",  "methods": ["POST", "OPTIONS"] },
     { "src": "/api/trending", "dest": "/api/trending.py", "methods": ["GET", "OPTIONS"] },
-    { "src": "/api/whale", "dest": "/api/whale.py", "methods": ["GET", "OPTIONS"] }
+    { "src": "/api/whale",    "dest": "/api/whale.py",    "methods": ["GET", "OPTIONS"] }
   ]
 }
