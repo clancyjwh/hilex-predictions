@@ -13,6 +13,50 @@ def http_get(url):
     with urllib.request.urlopen(req, timeout=15) as r:
         return json.loads(r.read().decode("utf-8"))
 
+def find_outcome_index(outcomes, query):
+    if not outcomes:
+        return 0
+    query_lower = query.lower()
+    
+    # 1. Check if it's a binary Yes/No market
+    normalized_outcomes = [str(o).lower().strip() for o in outcomes]
+    if len(normalized_outcomes) == 2 and ("yes" in normalized_outcomes or "no" in normalized_outcomes):
+        if "yes" in normalized_outcomes:
+            return normalized_outcomes.index("yes")
+        return 0
+
+    # 2. For categorical markets, find the best matching outcome based on query
+    import re
+    query_words = [w for w in re.findall(r'\b\w+\b', query_lower) if len(w) > 2]
+    
+    best_idx = 0
+    best_score = -1
+    
+    for idx, outcome in enumerate(normalized_outcomes):
+        score = 0
+        if outcome in query_lower or query_lower in outcome:
+            score += 10
+            
+        outcome_words = [w for w in re.findall(r'\b\w+\b', outcome) if len(w) > 2]
+        overlap = set(query_words).intersection(set(outcome_words))
+        score += len(overlap) * 2
+        
+        # Mention position bonus (prefer outcomes mentioned earlier in query)
+        first_mention_pos = 9999
+        for w in outcome_words:
+            pos = query_lower.find(w)
+            if pos != -1 and pos < first_mention_pos:
+                first_mention_pos = pos
+        
+        if first_mention_pos < 9999:
+            score += (1000 - first_mention_pos)
+            
+        if score > best_score:
+            best_score = score
+            best_idx = idx
+            
+    return best_idx
+
 def fetch_polymarket(keyword):
     params = urllib.parse.urlencode({"active": "true", "limit": 20, "keyword": keyword})
     data = http_get(f"{POLYMARKET_API}?{params}")
@@ -29,10 +73,21 @@ def fetch_polymarket(keyword):
             if not isinstance(prices, list):
                 prices = [None]
             
-            yes_prob = None
-            if len(prices) > 0 and prices[0] is not None and prices[0] != "":
+            outcomes = m.get("outcomes")
+            if isinstance(outcomes, str):
                 try:
-                    yes_prob = float(prices[0])
+                    outcomes = json.loads(outcomes)
+                except Exception:
+                    outcomes = []
+            if not isinstance(outcomes, list):
+                outcomes = []
+
+            idx = find_outcome_index(outcomes, keyword)
+            
+            yes_prob = None
+            if len(prices) > idx and prices[idx] is not None and prices[idx] != "":
+                try:
+                    yes_prob = float(prices[idx])
                 except Exception:
                     pass
 
