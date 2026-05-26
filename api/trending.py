@@ -2,11 +2,17 @@ import json
 import urllib.request
 import os
 import concurrent.futures
+import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
+
+CACHE_FILE = '/tmp/trending_cache.json'
+if os.name == 'nt':
+    import tempfile
+    CACHE_FILE = os.path.join(tempfile.gettempdir(), 'trending_cache.json')
 
 POLYMARKET_TRENDING = "https://gamma-api.polymarket.com/markets?active=true&limit=100&order=volume24hr&ascending=false"
 POLYMARKET_MOVERS   = "https://gamma-api.polymarket.com/markets?active=true&limit=100"
@@ -117,7 +123,28 @@ class handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         try:
-            result = run_trending()
+            use_cache = False
+            result = None
+            if os.path.exists(CACHE_FILE):
+                try:
+                    with open(CACHE_FILE, 'r') as f:
+                        cache = json.load(f)
+                    ts = cache.get("timestamp", 0)
+                    if time.time() - ts < 86400:
+                        result = cache.get("data")
+                        if result:
+                            use_cache = True
+                except Exception:
+                    pass
+
+            if not use_cache:
+                result = run_trending()
+                try:
+                    with open(CACHE_FILE, 'w') as f:
+                        json.dump({"timestamp": time.time(), "data": result}, f)
+                except Exception:
+                    pass
+
             self._respond(200, result)
         except Exception as e:
             self._respond(500, {"error": str(e)})
