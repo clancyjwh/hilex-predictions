@@ -84,7 +84,7 @@ def research(query):
 
 def features(res):
     return safe_json(openai([
-        {"role": "system", "content": 'Convert research to scores. Return ONLY: {"sentiment_score":0,"momentum_score":0,"expert_consensus_score":0,"historical_similarity_score":0,"structural_bias_score":0,"uncertainty_score":0,"timeline_pressure_score":0,"risk_factors":[]}'},
+        {"role": "system", "content": 'Convert research to scores. Score each dimension on a scale of -1.0 to 1.0 (float values, e.g. -1.0, -0.5, 0.0, 0.5, 1.0). uncertainty_score must be between 0.0 and 1.0. Return ONLY this JSON structure: {"sentiment_score":0.0,"momentum_score":0.0,"expert_consensus_score":0.0,"historical_similarity_score":0.0,"structural_bias_score":0.0,"uncertainty_score":0.0,"timeline_pressure_score":0.0,"risk_factors":[]}'},
         {"role": "user", "content": json.dumps(res)}]))
 
 def match(query, markets):
@@ -157,10 +157,26 @@ def run(query):
     result    = misprice(feats, mat)
     narration = narrate(query, result, res)
     log_supabase(query, result, narration)
-    return {**result, "event_description": query,
-            "signal_summary": narration.get("signal_summary"),
-            "market_summary": narration.get("market_summary"),
-            "research": res}
+    
+    # Map backend scores to what the frontend expects
+    frontend_scores = {
+        "event_score": result.get("our_signal_score", 0.0),
+        "news_sentiment_score": feats.get("sentiment_score", 0.0),
+        "recent_momentum": feats.get("momentum_score", 0.0),
+        "expert_consensus_score": feats.get("expert_consensus_score", 0.0),
+        "historical_pattern_match": feats.get("historical_similarity_score", 0.0),
+        "structural_edge": feats.get("structural_bias_score", 0.0),
+        "time_pressure": feats.get("timeline_pressure_score", 0.0)
+    }
+    
+    return {
+        **result, 
+        **frontend_scores,
+        "event_description": query,
+        "signal_summary": narration.get("signal_summary"),
+        "market_summary": narration.get("market_summary"),
+        "research": res
+    }
 
 
 class handler(BaseHTTPRequestHandler):
