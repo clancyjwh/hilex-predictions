@@ -116,14 +116,21 @@ def misprice(feats, mat):
                 "polymarket_slug": None, "polymarket_question": None,
                 "polymarket_yes_prob": None, "polymarket_liquidity": None,
                 "polymarket_volume": None, "polymarket_week_change": None}
-    yp  = float(mat.get("yes_prob", 0))
-    liq = float(mat.get("liquidity", 0))
+    yp_val = mat.get("yes_prob")
+    yp  = float(yp_val) if yp_val is not None else 0.0
+    liq_val = mat.get("liquidity")
+    liq = float(liq_val) if liq_val is not None else 0.0
+    vol_val = mat.get("volume")
+    vol = float(vol_val) if vol_val is not None else 0.0
+    wc_val = mat.get("week_change")
+    wc = float(wc_val) if wc_val is not None else 0.0
+    
     gap = round(yp - prob, 4)
     cw  = 1 - unc
     return {"polymarket_matched": True, "polymarket_slug": mat.get("slug"),
             "polymarket_question": mat.get("question"), "polymarket_yes_prob": yp,
-            "polymarket_liquidity": liq, "polymarket_volume": float(mat.get("volume",0)),
-            "polymarket_week_change": float(mat.get("week_change",0)),
+            "polymarket_liquidity": liq, "polymarket_volume": vol,
+            "polymarket_week_change": wc,
             "our_signal_score": round(score,4), "our_direction": dir_,
             "gap": gap, "misprice_flag": abs(gap)>0.20 and liq>5000 and cw>0.4,
             "uncertainty": round(unc,4), "certainty_weight": round(cw,4), "features": feats}
