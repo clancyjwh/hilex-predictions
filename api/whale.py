@@ -133,9 +133,9 @@ def generate_fallback_summary(question, flags):
     reasons_str = ", and ".join(reasons)
     
     summary = (
-        f"This market was flagged for investigation due to a {reasons_str}. "
-        f"These conditions suggest abnormal trading patterns that could indicate targeted manipulation or sudden sentiment shift by large capital holders (whales). "
-        f"Analysts should exercise caution as the current odds may not accurately reflect organic crowd consensus."
+        f"This market was flagged because we detected a {reasons_str}. "
+        f"This means there are unusual trading activities (like rapid price moves or high volume compared to available funds) that deviate from normal patterns. "
+        f"While this highlights potential discrepancies in current odds, it does not constitute financial advice and users should perform their own research."
     )
     return summary
 
@@ -149,12 +149,14 @@ def get_ai_summary(question, flags, api_key):
     flag_text = "\n- ".join(flag_desc)
     
     prompt = (
-        f"You are a financial analyst. Write a beginner-friendly 2-3 sentence summary explaining exactly why this prediction market was flagged as anomalous.\n"
+        f"You are a compliant financial data analyzer. Write a beginner-friendly 2-3 sentence summary explaining exactly why this prediction market was flagged.\n"
         f"Market Question: {question}\n"
         f"Flagged Reasons:\n- {flag_text}\n\n"
         f"Instructions:\n"
+        f"- Use simple layman terms and basic, easy-to-understand language. Explain technical terms simply (e.g., explain liquidity as 'available trading funds' and velocity as 'speed of price changes').\n"
+        f"- State clearly what the anomaly means and what the observed data signals, highlighting the price/odds discrepancies without advising any action.\n"
+        f"- Strict Compliance: NEVER give financial advice, trading recommendations, or tell the user what to do. Focus purely on explaining the observed data anomaly.\n"
         f"- Be concise: exactly 2 to 3 sentences.\n"
-        f"- Explain the anomaly in simple, beginner-friendly terms (e.g. explain what liquidity or velocity spikes mean here).\n"
         f"- Mention specific details/numbers from the flagged reasons.\n"
         f"- Do not use greeting, introductory or concluding remarks. Start directly with the summary."
     )
