@@ -74,7 +74,7 @@ def fetch_polymarket(keyword):
 
 def research(query):
     resp = http_post(PERPLEXITY_URL, {
-        "model": "llama-3.1-sonar-large-128k-online",
+        "model": "sonar",
         "messages": [
             {"role": "system", "content": 'Research this prediction market event. Return ONLY this JSON, nothing else: {"key_facts":[],"current_conditions":[],"historical_context":[],"expert_analysis":[],"momentum_signals":[],"risk_factors":[],"timing_pressure":""}'},
             {"role": "user", "content": query}],
