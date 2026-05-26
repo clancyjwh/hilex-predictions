@@ -5,6 +5,7 @@ import os
 import concurrent.futures
 import traceback
 import sys
+from http.server import BaseHTTPRequestHandler
 
 PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY", "")
 OPENAI_API_KEY     = os.environ.get("OPENAI_API_KEY", "")
@@ -158,18 +159,52 @@ def run(query):
             "research": res}
 
 
-def handler(request):
-    if request.method == "OPTIONS":
-        return {"statusCode": 200, "headers": CORS, "body": ""}
-    if request.method != "POST":
-        return {"statusCode": 405, "headers": CORS, "body": json.dumps({"error": "POST only"})}
-    try:
-        body  = json.loads(request.body if isinstance(request.body, str) else request.body.decode())
-        query = (body.get("query") or "").strip()
-        if not query:
-            return {"statusCode": 400, "headers": CORS, "body": json.dumps({"error": "query is required"})}
-        result = run(query)
-        return {"statusCode": 200, "headers": CORS, "body": json.dumps(result)}
-    except Exception as e:
-        tb = traceback.format_exc()
-        return err(str(e), tb)
+class handler(BaseHTTPRequestHandler):
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self._cors()
+        self.end_headers()
+
+    def do_POST(self):
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            body = json.loads(post_data.decode('utf-8'))
+            query = (body.get("query") or "").strip()
+            if not query:
+                self._respond(400, {"error": "query is required"})
+                return
+            result = run(query)
+            self._respond(200, result)
+        except Exception as e:
+            tb = traceback.format_exc()
+            self._respond_err(500, str(e), tb)
+
+    def _respond(self, status, data):
+        payload = json.dumps(data).encode("utf-8")
+        self.send_response(status)
+        self._cors()
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", len(payload))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _respond_err(self, status, msg, tb=""):
+        print("HILEX ERROR:", msg, file=sys.stderr)
+        print(tb, file=sys.stderr)
+        payload = json.dumps({"error": msg, "trace": tb}).encode("utf-8")
+        self.send_response(status)
+        self._cors()
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", len(payload))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _cors(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+    def log_message(self, *args):
+        pass
